@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: knicksbot
+    runtime: python
+    buildCommand: pip install nba_api requests pandas
+    startCommand: python3 knicks_score_bot.py
+    plan: free
