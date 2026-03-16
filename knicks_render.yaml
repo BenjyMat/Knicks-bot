@@ -2,6 +2,6 @@ services:
   - type: web
     name: knicksbot
     runtime: python
-    buildCommand: pip install nba_api requests pandas
-    startCommand: python3 knicks_score_bot.py
+    buildCommand: pip install nba_api requests flask gunicorn pandas
+    startCommand: gunicorn knicks_score_bot:app
     plan: free
