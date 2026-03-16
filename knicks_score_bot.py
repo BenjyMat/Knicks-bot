@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Knicks Score Bot for GroupMe - with dynamic Lakers bias
-Trash talk pulls real recent game results and builds lines from them.
-Runs forever.
+Knicks Score Bot - Request-driven version for Render free tier
+Each HTTP request checks the score and sends to GroupMe if changed.
+Cron-job.org hits the URL every minute to trigger checks.
 
-Setup:  pip install nba_api requests pandas
+Setup:  pip install nba_api requests flask pandas
 Run:    python3 knicks_score_bot.py
 """
 
-import requests
-import time
+import os
+import json
 import random
-import threading
+import requests
 from datetime import datetime
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from flask import Flask
 from nba_api.live.nba.endpoints import scoreboard, boxscore
 from nba_api.stats.endpoints import teamgamelog, leaguegamefinder
 
@@ -21,137 +21,103 @@ GROUPME_BOT_ID  = "2443fc8d8dd5281ceb9acc3f65"
 GROUPME_API_URL = "https://api.groupme.com/v3/bots/post"
 KNICKS_TEAM_ID  = 1610612752
 LAKERS_TEAM_ID  = 1610612747
+STATE_FILE      = "/tmp/knicks_state.json"
 
-# ── Fetch recent results ───────────────────────────────────────────────────────
+app = Flask(__name__)
+
+# ── Trash talk ─────────────────────────────────────────────────────────────────
+
+FALLBACK_TRAIL = ["Classic Knicks. Classic.", "The Garden is quiet tonight.", "Thibodeau playing starters 40 min again."]
+FALLBACK_WIN   = ["Good win. Lakers are still better.", "A win is a win. Even a Knicks win.", "Enjoy it. Won't last."]
+FALLBACK_HYPE  = ["Lakers quietly cooking this season.", "Crypto.com Arena > Madison Square Garden."]
+FALLBACK_H2H   = ["Lakers own the Knicks. History says so.", "This matchup always ends the same way."]
 
 def get_recent_games(team_id, n=5):
-    """Returns list of recent game dicts: {matchup, wl, pts, opp_pts}"""
     try:
         log = teamgamelog.TeamGameLog(team_id=team_id, season="2024-25")
-        df = log.get_data_frames()[0].head(n)
-        games = []
-        for _, row in df.iterrows():
-            games.append({
-                "matchup": row["MATCHUP"],
-                "wl": row["WL"],
-                "pts": int(row["PTS"]),
-                "opp_pts": int(row["PTS"] - row["PLUS_MINUS"]),
-                "date": row["GAME_DATE"],
-            })
-        return games
-    except Exception as e:
-        print(f"Game log error: {e}")
+        df  = log.get_data_frames()[0].head(n)
+        return [{"matchup": r["MATCHUP"], "wl": r["WL"], "pts": int(r["PTS"]),
+                 "opp_pts": int(r["PTS"] - r["PLUS_MINUS"])} for _, r in df.iterrows()]
+    except:
         return []
 
 def get_head_to_head(n=3):
-    """Find recent Lakers vs Knicks games."""
     try:
         finder = leaguegamefinder.LeagueGameFinder(team_id_nullable=LAKERS_TEAM_ID, season_nullable="2024-25")
         df = finder.get_data_frames()[0]
         h2h = df[df["MATCHUP"].str.contains("NYK")].head(n)
-        games = []
-        for _, row in h2h.iterrows():
-            games.append({
-                "date": row["GAME_DATE"],
-                "wl": row["WL"],
-                "pts": int(row["PTS"]),
-                "opp_pts": int(row["PTS"] - row["PLUS_MINUS"]),
-            })
-        return games
-    except Exception as e:
-        print(f"H2H error: {e}")
+        return [{"wl": r["WL"], "pts": int(r["PTS"]), "opp_pts": int(r["PTS"] - r["PLUS_MINUS"]),
+                 "date": r["GAME_DATE"]} for _, r in h2h.iterrows()]
+    except:
         return []
 
-# ── Build dynamic trash talk from real data ────────────────────────────────────
-
 def build_trash_talk():
-    """Pull real results and build trash talk lines from them."""
-    lakers  = get_recent_games(LAKERS_TEAM_ID, 5)
-    knicks  = get_recent_games(KNICKS_TEAM_ID, 5)
-    h2h     = get_head_to_head(3)
+    lakers = get_recent_games(LAKERS_TEAM_ID, 5)
+    knicks = get_recent_games(KNICKS_TEAM_ID, 5)
+    h2h    = get_head_to_head(3)
 
-    trail_lines = []
-    win_lines   = []
-    hype_lines  = []
-    h2h_lines   = []
+    trail, win, hype, h2h_lines = [], [], [], []
 
-    # Lakers recent form
     if lakers:
-        wins  = sum(1 for g in lakers if g["wl"] == "W")
-        losses = len(lakers) - wins
-        biggest_win = max((g for g in lakers if g["wl"] == "W"), key=lambda g: g["pts"] - g["opp_pts"], default=None)
+        wins = sum(1 for g in lakers if g["wl"] == "W")
         if wins >= 4:
-            hype_lines.append(f"Lakers are {wins}-{losses} in their last {len(lakers)}. Just saying.")
-        if biggest_win:
-            diff = biggest_win["pts"] - biggest_win["opp_pts"]
-            opp = biggest_win["matchup"].split(" ")[-1]
-            hype_lines.append(f"Lakers beat {opp} by {diff} recently. The league is scared.")
+            hype.append(f"Lakers are {wins}-{5-wins} in their last 5. Just saying.")
+        best = max((g for g in lakers if g["wl"] == "W"), key=lambda g: g["pts"]-g["opp_pts"], default=None)
+        if best:
+            hype.append(f"Lakers beat {best['matchup'].split()[-1]} by {best['pts']-best['opp_pts']} recently.")
 
-    # Knicks recent form
     if knicks:
-        wins  = sum(1 for g in knicks if g["wl"] == "W")
-        losses = len(knicks) - wins
-        worst_loss = max((g for g in knicks if g["wl"] == "L"), key=lambda g: g["opp_pts"] - g["pts"], default=None)
+        losses = sum(1 for g in knicks if g["wl"] == "L")
         if losses >= 3:
-            trail_lines.append(f"The Knicks are {wins}-{losses} in their last {len(knicks)}. Rough.")
-            win_lines.append(f"Good win. The Knicks needed that after going {wins}-{losses} recently.")
-        if worst_loss:
-            diff = worst_loss["opp_pts"] - worst_loss["pts"]
-            opp = worst_loss["matchup"].split(" ")[-1]
-            trail_lines.append(f"They just lost to {opp} by {diff}. Hard to watch.")
+            trail.append(f"The Knicks are {5-losses}-{losses} in their last 5. Rough.")
+            win.append(f"Good win. The Knicks needed that after going {5-losses}-{losses} recently.")
+        worst = max((g for g in knicks if g["wl"] == "L"), key=lambda g: g["opp_pts"]-g["pts"], default=None)
+        if worst:
+            trail.append(f"They just lost to {worst['matchup'].split()[-1]} by {worst['opp_pts']-worst['pts']}.")
 
-    # Head to head
-    if h2h:
-        lakers_h2h_wins = sum(1 for g in h2h if g["wl"] == "W")
-        for g in h2h:
-            diff = abs(g["pts"] - g["opp_pts"])
-            if g["wl"] == "W":
-                h2h_lines.append(f"Lakers beat the Knicks {g['pts']}-{g['opp_pts']} on {g['date']}. Recent history doesn't lie.")
-            else:
-                h2h_lines.append(f"Knicks got lucky {g['pts']}-{g['opp_pts']} last time. Won't happen again.")
-        if lakers_h2h_wins == len(h2h):
-            h2h_lines.append(f"Lakers are {lakers_h2h_wins}-0 against the Knicks this season.")
+    for g in h2h:
+        if g["wl"] == "W":
+            h2h_lines.append(f"Lakers beat the Knicks {g['pts']}-{g['opp_pts']} on {g['date']}.")
+        else:
+            h2h_lines.append(f"Knicks got lucky {g['opp_pts']}-{g['pts']} last time. Won't happen again.")
 
-    # Fallbacks if API returned nothing
-    if not trail_lines:
-        trail_lines = ["Classic Knicks. Classic.", "The Garden is quiet tonight.", "Brunson is tired."]
-    if not win_lines:
-        win_lines = ["Good win. Lakers are still better.", "A win is a win. Even a Knicks win.", "Enjoy it. Won't last."]
-    if not hype_lines:
-        hype_lines = ["Lakers quietly cooking this season.", "The Lakers exist and are better."]
-    if not h2h_lines:
-        h2h_lines = ["Lakers own the Knicks. History says so.", "This matchup always ends the same way."]
+    trail    = trail    or FALLBACK_TRAIL
+    win      = win      or FALLBACK_WIN
+    hype     = hype     or FALLBACK_HYPE
+    h2h_lines= h2h_lines or FALLBACK_H2H
 
-    # Always-true lines mixed in
-    trail_lines += ["MSG is the most overrated arena in the league.", "Thibodeau playing his starters 40 min again."]
-    win_lines   += ["Good for them. Still not winning a title.", "Alert the media. The Knicks won a game."]
-    hype_lines  += ["Crypto.com Arena > Madison Square Garden.", "The Lakers have more titles than the Knicks have playoff wins this decade."]
+    trail    += ["MSG is the most overrated arena in the league.", "Brunson is tired."]
+    win      += ["Good for them. Still not winning a title.", "Alert the media. The Knicks won."]
+    hype     += ["The Lakers have more titles than the Knicks have rings.", "Crypto.com > MSG."]
 
-    return trail_lines, win_lines, hype_lines, h2h_lines
+    return trail, win, hype, h2h_lines
 
-# ── Cache so we only refresh once per day ─────────────────────────────────────
-_cache = {"data": None, "date": None}
+_trash_cache = {"data": None, "date": None}
 
-def get_trash_talk():
-    today = datetime.now().date()
-    if _cache["date"] != today or _cache["data"] is None:
-        print(f"[{now()}] Refreshing trash talk from NBA API...")
-        _cache["data"] = build_trash_talk()
-        _cache["date"] = today
-    return _cache["data"]
+def get_trash():
+    today = datetime.now().strftime("%Y-%m-%d")
+    if _trash_cache["date"] != today:
+        _trash_cache["data"] = build_trash_talk()
+        _trash_cache["date"] = today
+    return _trash_cache["data"]
 
-def now():
-    return datetime.now().strftime("%H:%M:%S")
+def load_state():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f)
 
 def send(text):
     try:
         r = requests.post(GROUPME_API_URL, json={"bot_id": GROUPME_BOT_ID, "text": text}, timeout=10)
-        if r.status_code == 202:
-            print(f"[{now()}] Sent: {text!r}")
-        else:
-            print(f"GroupMe error {r.status_code}: {r.text}")
-    except requests.RequestException as e:
-        print(f"Request failed: {e}")
+        return r.status_code == 202
+    except:
+        return False
 
 def get_knicks_game():
     try:
@@ -171,7 +137,6 @@ def get_top_performers(game_id):
         lines = []
         best_player = None
         best_pts = -1
-
         for team_key in ["homeTeam", "awayTeam"]:
             team = game_data[team_key]
             tricode = team["teamTricode"]
@@ -191,12 +156,11 @@ def get_top_performers(game_id):
             if top_scorer["statistics"]["points"] > best_pts:
                 best_pts = top_scorer["statistics"]["points"]
                 best_player = (tricode, top_scorer)
-
         result = ["Top Performers:\n" + "\n".join(lines)]
         if best_player:
             tricode, p = best_player
             s = p["statistics"]
-            mins = s.get("minutesCalculated", "PT0M").replace("PT","").replace("M"," min")
+            mins = s.get("minutesCalculated","PT0M").replace("PT","").replace("M"," min")
             fg = f"{s.get('fieldGoalsMade',0)}/{s.get('fieldGoalsAttempted',0)}"
             tp = f"{s.get('threePointersMade',0)}/{s.get('threePointersAttempted',0)}"
             ft = f"{s.get('freeThrowsMade',0)}/{s.get('freeThrowsAttempted',0)}"
@@ -213,7 +177,7 @@ def get_top_performers(game_id):
         return None
 
 def score_key(game):
-    return f"{game['homeTeam']['score']}-{game['awayTeam']['score']}-Q{game.get('period', 0)}"
+    return f"{game['homeTeam']['score']}-{game['awayTeam']['score']}-Q{game.get('period',0)}"
 
 def get_knicks_scores(game):
     home, away = game["homeTeam"], game["awayTeam"]
@@ -226,134 +190,98 @@ def get_knicks_scores(game):
 
 def format_live(game):
     knicks, opp, opp_name, vs_lakers = get_knicks_scores(game)
-    trail_lines, win_lines, hype_lines, h2h_lines = get_trash_talk()
-
+    trail, win, hype, h2h_lines = get_trash()
     period = game.get("period", "?")
-    period_str = f"Q{period}" if isinstance(period, int) and period <= 4 else f"OT{period - 4}"
-    clock = game.get("gameClock", "").replace("PT","").replace("M",":").replace("S","").strip()
+    period_str = f"Q{period}" if isinstance(period, int) and period <= 4 else f"OT{period-4}"
+    clock = game.get("gameClock","").replace("PT","").replace("M",":").replace("S","").strip()
     clock_str = f" {clock}" if clock else ""
-
     if knicks > opp:
-        quip = random.choice(h2h_lines if vs_lakers else win_lines)
+        quip = random.choice(h2h_lines if vs_lakers else win)
         status = f"NYK LEAD\n{quip}"
     elif knicks < opp:
-        quip = random.choice(h2h_lines if vs_lakers else trail_lines)
+        quip = random.choice(h2h_lines if vs_lakers else trail)
         status = f"NYK TRAIL\n{quip}"
     else:
         status = "TIED\nDon't get excited. It's a tie."
-
     return f"{period_str}{clock_str}\nNYK {knicks} - {opp} {opp_name}\n{status}"
 
 def format_final(game):
     knicks, opp, opp_name, vs_lakers = get_knicks_scores(game)
-    trail_lines, win_lines, hype_lines, h2h_lines = get_trash_talk()
+    trail, win, hype, h2h_lines = get_trash()
     if knicks > opp:
-        result = f"NYK WIN\n{random.choice(win_lines)}"
+        result = f"NYK WIN\n{random.choice(win)}"
     else:
-        quip = random.choice(h2h_lines if vs_lakers else trail_lines)
+        quip = random.choice(h2h_lines if vs_lakers else trail)
         result = f"NYK LOSS\n{quip}"
     return f"FINAL\nNYK {knicks} - {opp} {opp_name}\n{result}"
 
-def main():
-    print(f"Knicks Score Bot started -- {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    send("Knicks bot is live. Lakers are still better.")
+@app.route("/")
+def check_score():
+    state = load_state()
+    game  = get_knicks_game()
 
-    last_score_key   = None
-    preview_sent     = False
-    final_sent       = False
-    last_game_id     = None
-    last_period      = None
-    quarter_end_sent = set()
-    poll_count       = 0
+    if not game:
+        return "No Knicks game today", 200
 
-    while True:
-        game = get_knicks_game()
+    game_id = game["gameId"]
+    status  = game["gameStatus"]
 
-        if not game:
-            print(f"[{now()}] No Knicks game today. Sleeping 30 min...")
-            time.sleep(1800)
-            continue
+    if state.get("game_id") != game_id:
+        state = {"game_id": game_id}
 
-        game_id = game["gameId"]
+    messages_sent = []
 
-        if game_id != last_game_id:
-            last_score_key   = None
-            preview_sent     = False
-            final_sent       = False
-            last_period      = None
-            quarter_end_sent = set()
-            poll_count       = 0
-            last_game_id     = game_id
+    if status == 1 and not state.get("preview_sent"):
+        trail, win, hype, h2h_lines = get_trash()
+        home   = game["homeTeam"]["teamName"]
+        away   = game["awayTeam"]["teamName"]
+        tipoff = game.get("gameStatusText", "TBD")
+        vs_lakers = game["homeTeam"]["teamId"] == LAKERS_TEAM_ID or game["awayTeam"]["teamId"] == LAKERS_TEAM_ID
+        extra = f" {random.choice(h2h_lines)}" if vs_lakers else ""
+        send(f"Knicks game today!\n{away} @ {home}\nTipoff: {tipoff}{extra}")
+        state["preview_sent"] = True
+        messages_sent.append("preview")
 
-        status = game["gameStatus"]
+    elif status == 2:
+        key = score_key(game)
+        if state.get("last_score") != key:
+            send(format_live(game))
+            state["last_score"] = key
+            messages_sent.append(f"score: {key}")
 
-        if status == 1:
-            if not preview_sent:
-                trail_lines, win_lines, hype_lines, h2h_lines = get_trash_talk()
-                home   = game["homeTeam"]["teamName"]
-                away   = game["awayTeam"]["teamName"]
-                tipoff = game.get("gameStatusText", "TBD")
-                vs_lakers = game["homeTeam"]["teamId"] == LAKERS_TEAM_ID or game["awayTeam"]["teamId"] == LAKERS_TEAM_ID
-                extra = f" {random.choice(h2h_lines)}" if vs_lakers else ""
-                send(f"Knicks game today!\n{away} @ {home}\nTipoff: {tipoff}{extra}")
-                preview_sent = True
-            else:
-                print(f"[{now()}] Waiting for tipoff...")
-            time.sleep(60)
+        current_period = game.get("period", 0)
+        last_period    = state.get("last_period", 0)
+        sent_quarters  = state.get("sent_quarters", [])
 
-        elif status == 2:
-            current_period = game.get("period", 0)
-            poll_count += 1
+        if current_period > last_period and last_period > 0 and last_period not in sent_quarters:
+            performers = get_top_performers(game_id)
+            if performers:
+                period_label = f"Q{last_period}" if last_period <= 4 else f"OT{last_period-4}"
+                send(f"-- End of {period_label} --\n{performers}")
+            sent_quarters.append(last_period)
+            state["sent_quarters"] = sent_quarters
+            messages_sent.append(f"quarter end Q{last_period}")
 
-            end_of_quarter = (
-                current_period > 1 and
-                current_period != last_period and
-                last_period is not None and
-                last_period not in quarter_end_sent
-            )
-            if end_of_quarter:
-                performers = get_top_performers(game_id)
-                if performers:
-                    period_label = f"Q{last_period}" if last_period <= 4 else f"OT{last_period - 4}"
-                    send(f"-- End of {period_label} --\n{performers}")
-                quarter_end_sent.add(last_period)
+        # Random Lakers hype once per game (at Q2)
+        if current_period == 2 and not state.get("hype_sent"):
+            _, _, hype, _ = get_trash()
+            send(random.choice(hype))
+            state["hype_sent"] = True
 
-            last_period = current_period
+        state["last_period"] = current_period
 
-            # Random Lakers hype every ~45 min
-            if poll_count % 540 == 0:
-                _, _, hype_lines, _ = get_trash_talk()
-                send(random.choice(hype_lines))
+    elif status == 3 and not state.get("final_sent"):
+        send(format_final(game))
+        performers = get_top_performers(game_id)
+        if performers:
+            send(f"-- Final Stats --\n{performers}")
+        state["final_sent"] = True
+        messages_sent.append("final")
 
-            key = score_key(game)
-            if key != last_score_key:
-                send(format_live(game))
-                last_score_key = key
-            else:
-                print(f"[{now()}] Score unchanged ({key})")
-            time.sleep(5)
-
-        elif status == 3:
-            if not final_sent:
-                send(format_final(game))
-                performers = get_top_performers(game_id)
-                if performers:
-                    send(f"-- Final Stats --\n{performers}")
-                final_sent = True
-                print(f"[{now()}] Game over. Sleeping 8 hours...")
-            time.sleep(28800)
-
-class KeepAlive(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Knicks bot running")
-    def log_message(self, format, *args):
-        pass
+    save_state(state)
+    now = datetime.now().strftime("%H:%M:%S")
+    return f"[{now}] OK - {', '.join(messages_sent) if messages_sent else 'no change'}", 200
 
 if __name__ == "__main__":
-    server = HTTPServer(("0.0.0.0", 10000), KeepAlive)
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
-    print("Web server started on port 10000")
-    main()
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
