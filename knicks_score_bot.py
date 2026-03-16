@@ -27,10 +27,82 @@ app = Flask(__name__)
 
 # ── Trash talk ─────────────────────────────────────────────────────────────────
 
-FALLBACK_TRAIL = ["Classic Knicks. Classic.", "The Garden is quiet tonight.", "Thibodeau playing starters 40 min again."]
-FALLBACK_WIN   = ["Good win. Lakers are still better.", "A win is a win. Even a Knicks win.", "Enjoy it. Won't last."]
-FALLBACK_HYPE  = ["Lakers quietly cooking this season.", "Crypto.com Arena > Madison Square Garden."]
-FALLBACK_H2H   = ["Lakers own the Knicks. History says so.", "This matchup always ends the same way."]
+FALLBACK_TRAIL = [
+    "Classic Knicks. Classic.",
+    "The Garden is quiet tonight.",
+    "Thibodeau playing starters 40 min again.",
+    "Brunson is doing everything and it still isn't enough.",
+    "The Knicks: breaking hearts since 1946.",
+    "This is painful. Even for a Knicks fan.",
+    "Someone call a timeout. Please.",
+    "The defense just took the night off.",
+    "MSG is too quiet for a reason.",
+    "They really couldn't stop that?",
+    "That's on Thibodeau. You know it. I know it.",
+    "The Knicks are allergic to easy baskets.",
+    "Another day, another Knicks collapse incoming.",
+    "Is this a basketball team or a charity?",
+    "Jalen Brunson with 30 and still losing. Impressive.",
+    "The Knicks offense looks like a pickup game right now.",
+    "If the Knicks had a dollar for every blown lead they'd be rich.",
+    "Protecting a lead is not in the Knicks vocabulary.",
+    "Town is rebounding, Brunson is scoring, and they're still losing. How.",
+    "The fourth quarter is going to be something.",
+    "The Knicks playing down to their competition again.",
+    "Free throws are free. The Knicks didn't get that memo.",
+    "This team stresses me out and I don't even root for them.",
+    "The rotation looks like Thibodeau just threw darts at a board.",
+    "At some point you have to wonder if this is intentional.",
+]
+
+FALLBACK_WIN = [
+    "Good win. Lakers are still better.",
+    "A win is a win. Even a Knicks win.",
+    "Enjoy it. Won't last.",
+    "Good for them. Still not winning a title.",
+    "Alert the media. The Knicks won a game.",
+    "They won! Shocking absolutely nobody said ever.",
+    "Solid W. Luka's been resting anyway.",
+    "Not bad for a team with a bottom-10 defense.",
+    "The Knicks win! Go buy a lottery ticket while you're at it.",
+    "Great win. See you in the second round exit.",
+    "Nice game. The Lakers would've won by 20 though.",
+    "Brunson balled out. Credit where it's due. Still not a title.",
+    "Good W. The celebration in MSG was probably adorable.",
+    "One win closer to a first round playoff exit.",
+    "They won. I'll give them that. For now.",
+]
+
+FALLBACK_HYPE = [
+    "Lakers quietly cooking this season.",
+    "Crypto.com Arena > Madison Square Garden.",
+    "The Lakers have more titles than the Knicks have had good decades.",
+    "Just a reminder Luka is a Laker now. Sleep on that.",
+    "Lakers fans don't stress like this. Just saying.",
+    "The Lakers front office just built different.",
+    "Purple and gold looks better than orange and blue anyway.",
+    "The Lakers could lose 10 in a row and still have more rings than the Knicks.",
+    "Luka. In LA. In his prime. Goodnight.",
+    "The Knicks have been rebuilding since 2000. The Lakers just win.",
+    "LA weather, LA fans, LA championships. The Knicks get cold winters.",
+    "No drama, no chaos, just Lakers basketball.",
+    "The Lakers last title drought is shorter than the Knicks entire championship history.",
+    "Somewhere LeBron is watching this and laughing.",
+    "A Laker fan has never felt what a Knicks fan feels on a nightly basis.",
+]
+
+FALLBACK_H2H = [
+    "Lakers own the Knicks. History says so.",
+    "This matchup always ends the same way.",
+    "The Knicks have no answer for the Lakers. Never have.",
+    "Every time these two meet, Lakers fans sleep well that night.",
+    "The Knicks have been practicing all week for this. It won't matter.",
+    "Lakers vs Knicks. You already know how this ends.",
+    "The Knicks fans showed up with hope. Adorable.",
+    "MSG gets loud for the Lakers. For the wrong team.",
+    "The Lakers don't even need to game plan for the Knicks.",
+    "Knicks in LA is a vacation game for the Lakers roster.",
+]
 
 def get_recent_games(team_id, n=5):
     try:
@@ -86,9 +158,9 @@ def build_trash_talk():
     hype     = hype     or FALLBACK_HYPE
     h2h_lines= h2h_lines or FALLBACK_H2H
 
-    trail    += ["MSG is the most overrated arena in the league.", "Brunson is tired."]
-    win      += ["Good for them. Still not winning a title.", "Alert the media. The Knicks won."]
-    hype     += ["The Lakers have more titles than the Knicks have rings.", "Crypto.com > MSG."]
+    trail    += ["MSG is the most overrated arena in the league.", "Brunson is exhausted.", "The Knicks make everything harder than it needs to be.", "Defense is optional for the Knicks tonight.", "This team has a talent for making you nervous."]
+    win      += ["Good for them. Still not winning a title.", "Alert the media. The Knicks won.", "Even a broken clock is right twice a day.", "The Knicks remembered how to play basketball. Temporarily."]
+    hype     += ["The Lakers have more titles than the Knicks have rings.", "Crypto.com > MSG.", "Being a Lakers fan is just easier.", "LeBron. Luka. Legacy. The Knicks have Brunson and prayers."]
 
     return trail, win, hype, h2h_lines
 
@@ -188,6 +260,20 @@ def get_knicks_scores(game):
         knicks, opp, opp_name = away["score"], home["score"], home["teamName"]
     return knicks, opp, opp_name, vs_lakers
 
+# Track position in trash talk lists so we cycle through without repeating
+_trail_idx = 0
+_trail_shuffled = []
+
+def next_trail_line(lines):
+    global _trail_idx, _trail_shuffled
+    if not _trail_shuffled or _trail_idx >= len(_trail_shuffled):
+        _trail_shuffled = lines.copy()
+        random.shuffle(_trail_shuffled)
+        _trail_idx = 0
+    line = _trail_shuffled[_trail_idx]
+    _trail_idx += 1
+    return line
+
 def format_live(game):
     knicks, opp, opp_name, vs_lakers = get_knicks_scores(game)
     trail, win, hype, h2h_lines = get_trash()
@@ -196,10 +282,22 @@ def format_live(game):
     clock = game.get("gameClock","").replace("PT","").replace("M",":").replace("S","").strip()
     clock_str = f" {clock}" if clock else ""
     if knicks > opp:
-        quip = random.choice(h2h_lines if vs_lakers else win)
+        # Mid-game lead: no win lines, just neutral chirp
+        quip = next_trail_line(h2h_lines if vs_lakers else [
+            "Enjoy the lead while it lasts.",
+            "Knicks up. Temporarily.",
+            "Don't celebrate yet.",
+            "They're ahead. I give it two minutes.",
+            "The Knicks are leading. Note the time.",
+            "Up by a few. The collapse is coming.",
+            "Leading right now. Keywords: right now.",
+            "Shocking development. Won't last.",
+            "NYK ahead. Clock is ticking.",
+            "Brunson scored 8 in a row and the Knicks are somehow only up 2.",
+        ])
         status = f"NYK LEAD\n{quip}"
     elif knicks < opp:
-        quip = random.choice(h2h_lines if vs_lakers else trail)
+        quip = next_trail_line(h2h_lines if vs_lakers else trail)
         status = f"NYK TRAIL\n{quip}"
     else:
         status = "TIED\nDon't get excited. It's a tie."
