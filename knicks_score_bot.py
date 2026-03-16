@@ -283,21 +283,19 @@ def get_knicks_scores(game):
         knicks, opp, opp_name = away["score"], home["score"], home["teamName"]
     return knicks, opp, opp_name, vs_lakers
 
-# Track position in trash talk lists so we cycle through without repeating
-_trail_idx = 0
-_trail_shuffled = []
-
-def next_trail_line(lines):
-    global _trail_idx, _trail_shuffled
-    if not _trail_shuffled or _trail_idx >= len(_trail_shuffled):
-        _trail_shuffled = lines.copy()
-        random.shuffle(_trail_shuffled)
-        _trail_idx = 0
-    line = _trail_shuffled[_trail_idx]
-    _trail_idx += 1
+def next_line(lines, state, key):
+    """Pick next line from a list, cycling through all before repeating. State persisted to disk."""
+    used = state.get(f"used_{key}", [])
+    remaining = [l for l in lines if l not in used]
+    if not remaining:
+        used = []
+        remaining = lines.copy()
+    line = random.choice(remaining)
+    used.append(line)
+    state[f"used_{key}"] = used
     return line
 
-def format_live(game):
+def format_live(game, state):
     knicks, opp, opp_name, vs_lakers = get_knicks_scores(game)
     trail, win, hype, h2h_lines = get_trash()
     period = game.get("period", "?")
@@ -306,10 +304,10 @@ def format_live(game):
     clock_str = f" {clock}" if clock else ""
     if knicks > opp:
         lead_lines = h2h_lines if vs_lakers else LEAD_MID
-        quip = next_trail_line(lead_lines)
+        quip = next_line(lead_lines, state, "lead")
         status = f"NYK LEAD\n{quip}"
     elif knicks < opp:
-        quip = next_trail_line(h2h_lines if vs_lakers else trail)
+        quip = next_line(h2h_lines if vs_lakers else trail, state, "trail")
         status = f"NYK TRAIL\n{quip}"
     else:
         status = "TIED\nDon't get excited. It's a tie."
@@ -355,7 +353,7 @@ def check_score():
     elif status == 2:
         key = score_key(game)
         if state.get("last_score") != key:
-            send(format_live(game))
+            send(format_live(game, state))
             state["last_score"] = key
             messages_sent.append(f"score: {key}")
 
