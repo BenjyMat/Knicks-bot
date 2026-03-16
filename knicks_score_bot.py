@@ -27,6 +27,29 @@ app = Flask(__name__)
 
 # ── Trash talk ─────────────────────────────────────────────────────────────────
 
+LEAD_MID = [
+    "Enjoy the lead while it lasts.",
+    "Knicks up. Temporarily.",
+    "Don't celebrate yet.",
+    "They're ahead. I give it two minutes.",
+    "The Knicks are leading. Note the time.",
+    "Up by a few. The collapse is coming.",
+    "Leading right now. Keywords: right now.",
+    "Shocking development. Won't last.",
+    "NYK ahead. Clock is ticking.",
+    "Brunson scored 8 in a row and somehow only up 2.",
+    "Fine. They're winning. For now.",
+    "The lead is there. So is the anxiety.",
+    "NYK up. Thibodeau will figure out a way to blow it.",
+    "I'll believe it when the final buzzer sounds.",
+    "The Knicks in the lead is like a horror movie. You know something is coming.",
+    "Up by 3. Feels like down by 20 with this team.",
+    "Leading but I'm still nervous for them. That's the Knicks effect.",
+    "Let's not pop champagne yet.",
+    "The Warriors timeout is going to change everything. Watch.",
+    "NYK ahead. Shocking. Temporary.",
+]
+
 FALLBACK_TRAIL = [
     "Classic Knicks. Classic.",
     "The Garden is quiet tonight.",
@@ -282,19 +305,8 @@ def format_live(game):
     clock = game.get("gameClock","").replace("PT","").replace("M",":").replace("S","").strip()
     clock_str = f" {clock}" if clock else ""
     if knicks > opp:
-        # Mid-game lead: no win lines, just neutral chirp
-        quip = next_trail_line(h2h_lines if vs_lakers else [
-            "Enjoy the lead while it lasts.",
-            "Knicks up. Temporarily.",
-            "Don't celebrate yet.",
-            "They're ahead. I give it two minutes.",
-            "The Knicks are leading. Note the time.",
-            "Up by a few. The collapse is coming.",
-            "Leading right now. Keywords: right now.",
-            "Shocking development. Won't last.",
-            "NYK ahead. Clock is ticking.",
-            "Brunson scored 8 in a row and the Knicks are somehow only up 2.",
-        ])
+        lead_lines = h2h_lines if vs_lakers else LEAD_MID
+        quip = next_trail_line(lead_lines)
         status = f"NYK LEAD\n{quip}"
     elif knicks < opp:
         quip = next_trail_line(h2h_lines if vs_lakers else trail)
